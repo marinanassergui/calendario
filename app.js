@@ -26,6 +26,7 @@ const searchInput = document.getElementById('search-notes-input');
 const filterPills = document.querySelectorAll('.filter-pill');
 
 // Modals & Forms
+const shareBtn = document.getElementById('share-btn');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsModal = document.getElementById('settings-modal');
 const settingsForm = document.getElementById('settings-form');
@@ -123,11 +124,50 @@ function adjustDaysArray() {
 
 // Inicializa a aplicação
 function init() {
-    // 1. Carrega dados do LocalStorage
+    // 1. Carrega dados do LocalStorage ou da URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramTitle = urlParams.get('t');
+    const paramStart = urlParams.get('s');
+    const paramEnd = urlParams.get('e');
+
+    let loadedSettings = null;
+
+    if (paramTitle && paramStart && paramEnd) {
+        // Carrega configurações compartilhadas pelo link
+        loadedSettings = {
+            title: decodeURIComponent(paramTitle),
+            startDate: paramStart,
+            endDate: paramEnd,
+            totalDays: getDaysDifference(paramStart, paramEnd) + 1
+        };
+        
+        // Verifica se é diferente das configurações salvas atualmente antes de reiniciar notas
+        const currentStoredSettings = localStorage.getItem('daytrack_settings');
+        let shouldClearNotes = false;
+        if (currentStoredSettings) {
+            const current = JSON.parse(currentStoredSettings);
+            if (current.startDate !== paramStart || current.endDate !== paramEnd || current.title !== decodeURIComponent(paramTitle)) {
+                shouldClearNotes = confirm("Você está abrindo uma contagem compartilhada diferente da sua atual. Deseja carregar esta nova contagem e limpar suas notas antigas?");
+            }
+        }
+
+        if (shouldClearNotes) {
+            localStorage.removeItem('daytrack_days');
+        }
+
+        localStorage.setItem('daytrack_settings', JSON.stringify(loadedSettings));
+        
+        // Limpa os parâmetros da URL de forma silenciosa
+        const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+        window.history.replaceState({ path: cleanUrl }, '', cleanUrl);
+    }
+
     const storedSettings = localStorage.getItem('daytrack_settings');
     const storedDays = localStorage.getItem('daytrack_days');
 
-    if (storedSettings) {
+    if (loadedSettings) {
+        state.settings = loadedSettings;
+    } else if (storedSettings) {
         state.settings = JSON.parse(storedSettings);
         // Compatibilidade reversa: se não houver endDate mas houver totalDays, calcula
         if (!state.settings.endDate) {
@@ -190,6 +230,11 @@ function setupEventListeners() {
     settingsCloseBtn.addEventListener('click', closeAllModals);
     settingsForm.addEventListener('submit', saveSettings);
     resetAllBtn.addEventListener('click', resetAllData);
+
+    // Botão Compartilhar
+    if (shareBtn) {
+        shareBtn.addEventListener('click', shareCountdown);
+    }
 
     // Ajusta o min da data de término dinamicamente nas configurações
     settingsStartDateInput.addEventListener('change', (e) => {
@@ -477,6 +522,25 @@ function resetAllData() {
 // Salva o array de dias no LocalStorage
 function saveDaysState() {
     localStorage.setItem('daytrack_days', JSON.stringify(state.days));
+}
+
+// Gera o link de compartilhamento da contagem e copia para a área de transferência
+function shareCountdown() {
+    const title = encodeURIComponent(state.settings.title);
+    const start = state.settings.startDate;
+    const end = state.settings.endDate;
+
+    // Constrói a URL completa
+    const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?t=${title}&s=${start}&e=${end}`;
+
+    // Copia para o clipboard
+    navigator.clipboard.writeText(shareUrl).then(() => {
+        alert("Link de compartilhamento copiado para a área de transferência!\nEnvie para outras pessoas para compartilharem esta contagem.");
+    }).catch(err => {
+        console.error('Erro ao copiar link: ', err);
+        // Fallback em caso de erro (ex: navegadores sem suporte a navigator.clipboard)
+        prompt("Copie o link abaixo para compartilhar:", shareUrl);
+    });
 }
 
 // Fecha todos os modais ativos
