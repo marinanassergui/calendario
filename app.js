@@ -129,33 +129,69 @@ function init() {
     const paramTitle = urlParams.get('t');
     const paramStart = urlParams.get('s');
     const paramEnd = urlParams.get('e');
+    const paramDays = urlParams.get('d');
 
     let loadedSettings = null;
+    let importedDaysMap = null;
 
     if (paramTitle && paramStart && paramEnd) {
-        // Carrega configurações compartilhadas pelo link
-        loadedSettings = {
-            title: decodeURIComponent(paramTitle),
-            startDate: paramStart,
-            endDate: paramEnd,
-            totalDays: getDaysDifference(paramStart, paramEnd) + 1
-        };
-        
-        // Verifica se é diferente das configurações salvas atualmente antes de reiniciar notas
-        const currentStoredSettings = localStorage.getItem('daytrack_settings');
-        let shouldClearNotes = false;
-        if (currentStoredSettings) {
-            const current = JSON.parse(currentStoredSettings);
-            if (current.startDate !== paramStart || current.endDate !== paramEnd || current.title !== decodeURIComponent(paramTitle)) {
-                shouldClearNotes = confirm("Você está abrindo uma contagem compartilhada diferente da sua atual. Deseja carregar esta nova contagem e limpar suas notas antigas?");
+        // Tenta decodificar as notas e status importados
+        if (paramDays) {
+            try {
+                const decodedString = decodeURIComponent(escape(atob(paramDays)));
+                const parsedData = JSON.parse(decodedString);
+                importedDaysMap = {};
+                parsedData.forEach(item => {
+                    importedDaysMap[item[0]] = {
+                        completed: item[1] === 1,
+                        note: item[2]
+                    };
+                });
+            } catch (err) {
+                console.error("Erro ao decodificar dados dos dias importados:", err);
             }
         }
 
-        if (shouldClearNotes) {
-            localStorage.removeItem('daytrack_days');
+        // Verifica se é diferente das configurações salvas atualmente antes de reiniciar notas
+        const currentStoredSettings = localStorage.getItem('daytrack_settings');
+        let shouldImport = true;
+        
+        if (currentStoredSettings) {
+            const current = JSON.parse(currentStoredSettings);
+            if (current.startDate !== paramStart || current.endDate !== paramEnd || current.title !== decodeURIComponent(paramTitle) || importedDaysMap) {
+                shouldImport = confirm("Você está abrindo uma contagem compartilhada com configurações e/ou notas personalizadas. Deseja carregar esta nova contagem e substituir seus dados locais?");
+            }
         }
 
-        localStorage.setItem('daytrack_settings', JSON.stringify(loadedSettings));
+        if (shouldImport) {
+            loadedSettings = {
+                title: decodeURIComponent(paramTitle),
+                startDate: paramStart,
+                endDate: paramEnd,
+                totalDays: getDaysDifference(paramStart, paramEnd) + 1
+            };
+            localStorage.setItem('daytrack_settings', JSON.stringify(loadedSettings));
+            
+            // Se houver dados de dias importados, reconstrói o array de dias imediatamente
+            if (importedDaysMap) {
+                const total = loadedSettings.totalDays;
+                const start = loadedSettings.startDate;
+                state.days = [];
+                for (let i = 0; i < total; i++) {
+                    const dayNum = i + 1;
+                    const imp = importedDaysMap[dayNum] || { completed: false, note: "" };
+                    state.days.push({
+                        dayNumber: dayNum,
+                        date: addDaysToDate(start, i),
+                        completed: imp.completed,
+                        note: imp.note
+                    });
+                }
+                saveDaysState();
+            } else {
+                localStorage.removeItem('daytrack_days');
+            }
+        }
         
         // Limpa os parâmetros da URL de forma silenciosa
         const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
@@ -182,7 +218,10 @@ function init() {
         localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
     }
 
-    if (storedDays) {
+    // Se já foram importados no bloco acima, não lê de novo do storedDays
+    if (importedDaysMap && loadedSettings) {
+        // já está preenchido no state.days
+    } else if (storedDays) {
         state.days = JSON.parse(storedDays);
     } else {
         state.days = [];
@@ -522,18 +561,34 @@ function saveDaysState() {
     localStorage.setItem('daytrack_days', JSON.stringify(state.days));
 }
 
-// Gera o link de compartilhamento da contagem e copia para a área de transferência
+// Gera o link de compartilhamento da contagem (com notas e status) e copia para a área de transferência
 function shareCountdown() {
     const title = encodeURIComponent(state.settings.title);
     const start = state.settings.startDate;
     const end = state.settings.endDate;
 
+    // Filtra e prepara as notas e status dos dias para serialização compacta (apenas dias com dados)
+    const activeDays = state.days
+        .filter(d => d.completed || (d.note && d.note.trim() !== ''))
+        .map(d => [d.dayNumber, d.completed ? 1 : 0, d.note]);
+    
+    let daysParam = '';
+    if (activeDays.length > 0) {
+        try {
+            const dataString = JSON.stringify(activeDays);
+            const base64Data = btoa(unescape(encodeURIComponent(dataString)));
+            daysParam = `&d=${base64Data}`;
+        } catch (err) {
+            console.error("Erro ao codificar notas para compartilhamento:", err);
+        }
+    }
+
     // Constrói a URL completa
-    const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?t=${title}&s=${start}&e=${end}`;
+    const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?t=${title}&s=${start}&e=${end}${daysParam}`;
 
     // Copia para o clipboard
     navigator.clipboard.writeText(shareUrl).then(() => {
-        alert("Link de compartilhamento copiado para a área de transferência!\nEnvie para outras pessoas para compartilharem esta contagem.");
+        alert("Link de compartilhamento (com notas inclusas!) copiado para a área de transferência.\nEnvie para outras pessoas para compartilharem esta contagem.");
     }).catch(err => {
         console.error('Erro ao copiar link: ', err);
         // Fallback em caso de erro (ex: navegadores sem suporte a navigator.clipboard)
