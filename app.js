@@ -252,10 +252,8 @@ function setupEventListeners() {
 
 // Atualiza toda a Interface Gráfica
 function updateUI() {
-    // 1. Calcula datas do evento
     const startDate = state.settings.startDate;
-    const total = parseInt(state.settings.totalDays, 10);
-    const eventDate = addDaysToDate(startDate, total);
+    const eventDate = state.settings.endDate;
 
     // 2. Atualiza título e cabeçalho
     counterTitleEl.textContent = state.settings.title;
