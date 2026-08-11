@@ -151,7 +151,7 @@ async function init() {
     // Carrega dados da nuvem se estiver conectado a um bin
     if (binId) {
         try {
-            const response = await fetch(`https://jsonbin-zeta.vercel.app/api/bins/${binId}`);
+            const response = await fetch(getApiUrl(binId));
             if (response.ok) {
                 const data = await response.json();
                 if (data.settings && data.days) {
@@ -567,6 +567,13 @@ function saveDaysState() {
     syncToCloud();
 }
 
+// Auxiliar para contornar problemas de CORS usando o proxy público cors.sh
+const API_BASE = 'https://jsonbin-zeta.vercel.app/api/bins';
+function getApiUrl(endpoint = '') {
+    const url = endpoint ? `${API_BASE}/${endpoint}` : API_BASE;
+    return `https://proxy.cors.sh/${url}`;
+}
+
 // Cria um novo bin de compartilhamento na nuvem (JSONBin-zeta Vercel)
 async function createShareBin() {
     const payload = {
@@ -575,7 +582,7 @@ async function createShareBin() {
     };
 
     try {
-        const response = await fetch('https://jsonbin-zeta.vercel.app/api/bins', {
+        const response = await fetch(getApiUrl(), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -606,7 +613,7 @@ async function syncToCloud() {
     };
 
     try {
-        await fetch(`https://jsonbin-zeta.vercel.app/api/bins/${binId}`, {
+        await fetch(getApiUrl(binId), {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json'
@@ -636,7 +643,7 @@ function startPolling() {
         }
 
         try {
-            const response = await fetch(`https://jsonbin-zeta.vercel.app/api/bins/${currentBinId}`);
+            const response = await fetch(getApiUrl(currentBinId));
             if (response.ok) {
                 const data = await response.json();
                 
