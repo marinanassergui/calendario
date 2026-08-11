@@ -1,0 +1,7 @@
+.DS_Store
+.gemini/
+.agents/
+scratch/
+task.md
+walkthrough.md
+implementation_plan.md
