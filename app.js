@@ -31,7 +31,7 @@ const settingsModal = document.getElementById('settings-modal');
 const settingsForm = document.getElementById('settings-form');
 const settingsTitleInput = document.getElementById('settings-title');
 const settingsStartDateInput = document.getElementById('settings-start-date');
-const settingsTotalDaysInput = document.getElementById('settings-total-days');
+const settingsEndDateInput = document.getElementById('settings-end-date');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
 const resetAllBtn = document.getElementById('reset-all-btn');
 
@@ -87,10 +87,14 @@ function getTodayDateStr() {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-// Ajusta o array de dias baseado em totalDays e startDate
+// Ajusta o array de dias baseado em startDate e endDate
 function adjustDaysArray() {
-    const total = parseInt(state.settings.totalDays, 10) || 30;
     const start = state.settings.startDate || getTodayDateStr();
+    const end = state.settings.endDate || addDaysToDate(start, 29);
+    
+    // Calcula o total de dias a partir da diferença
+    const total = getDaysDifference(start, end) + 1;
+    state.settings.totalDays = total;
 
     // Adiciona dias faltantes se o array for menor que o necessário
     while (state.days.length < total) {
@@ -125,9 +129,15 @@ function init() {
 
     if (storedSettings) {
         state.settings = JSON.parse(storedSettings);
+        // Compatibilidade reversa: se não houver endDate mas houver totalDays, calcula
+        if (!state.settings.endDate) {
+            const total = parseInt(state.settings.totalDays, 10) || 30;
+            state.settings.endDate = addDaysToDate(state.settings.startDate, total - 1);
+        }
     } else {
         state.settings.title = "Minha Viagem";
         state.settings.startDate = getTodayDateStr();
+        state.settings.endDate = addDaysToDate(state.settings.startDate, 29); // 30 dias de duração (dia 1 ao 30)
         state.settings.totalDays = 30;
         localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
     }
@@ -180,6 +190,14 @@ function setupEventListeners() {
     settingsCloseBtn.addEventListener('click', closeAllModals);
     settingsForm.addEventListener('submit', saveSettings);
     resetAllBtn.addEventListener('click', resetAllData);
+
+    // Ajusta o min da data de término dinamicamente nas configurações
+    settingsStartDateInput.addEventListener('change', (e) => {
+        settingsEndDateInput.min = e.target.value;
+        if (settingsEndDateInput.value && settingsEndDateInput.value < e.target.value) {
+            settingsEndDateInput.value = e.target.value;
+        }
+    });
 
     // Modal Editar Dia
     modalCloseBtn.addEventListener('click', closeAllModals);
@@ -387,7 +405,10 @@ function clearDayData() {
 function openSettingsModal() {
     settingsTitleInput.value = state.settings.title;
     settingsStartDateInput.value = state.settings.startDate;
-    settingsTotalDaysInput.value = state.settings.totalDays;
+    settingsEndDateInput.value = state.settings.endDate;
+    
+    // Define a data mínima de término
+    settingsEndDateInput.min = state.settings.startDate;
 
     settingsModal.classList.add('active');
     settingsModal.setAttribute('aria-hidden', 'false');
@@ -398,9 +419,15 @@ function saveSettings(e) {
     e.preventDefault();
     const newTitle = settingsTitleInput.value.trim();
     const newStartDate = settingsStartDateInput.value;
-    const newTotalDays = parseInt(settingsTotalDaysInput.value, 10) || 30;
-    
+    const newEndDate = settingsEndDateInput.value;
+
+    const newTotalDays = getDaysDifference(newStartDate, newEndDate) + 1;
     const oldTotalDays = state.settings.totalDays;
+
+    if (newTotalDays < 1) {
+        alert("A data de término deve ser igual ou posterior à data de início!");
+        return;
+    }
 
     // Alerta se estiver diminuindo a quantidade de dias
     if (newTotalDays < oldTotalDays) {
@@ -411,6 +438,7 @@ function saveSettings(e) {
 
     state.settings.title = newTitle || "Minha Viagem";
     state.settings.startDate = newStartDate;
+    state.settings.endDate = newEndDate;
     state.settings.totalDays = newTotalDays;
 
     localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
@@ -429,9 +457,11 @@ function resetAllData() {
         localStorage.removeItem('daytrack_settings');
         
         // Reseta o estado local
+        const today = getTodayDateStr();
         state.settings = {
             title: "Minha Viagem",
-            startDate: getTodayDateStr(),
+            startDate: today,
+            endDate: addDaysToDate(today, 29),
             totalDays: 30
         };
         state.days = [];
