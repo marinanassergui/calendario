@@ -35,6 +35,7 @@ const settingsStartDateInput = document.getElementById('settings-start-date');
 const settingsEndDateInput = document.getElementById('settings-end-date');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
 const resetAllBtn = document.getElementById('reset-all-btn');
+const disconnectBtn = document.getElementById('disconnect-bin-btn');
 
 const editDayModal = document.getElementById('edit-day-modal');
 const editDayForm = document.getElementById('edit-day-form');
@@ -123,108 +124,75 @@ function adjustDaysArray() {
 }
 
 // Inicializa a aplicação
-function init() {
-    // 1. Carrega dados do LocalStorage ou da URL
+async function init() {
     const urlParams = new URLSearchParams(window.location.search);
-    const paramTitle = urlParams.get('t');
-    const paramStart = urlParams.get('s');
-    const paramEnd = urlParams.get('e');
-    const paramDays = urlParams.get('d');
+    let binId = urlParams.get('b') || localStorage.getItem('daytrack_current_bin_id');
 
-    let loadedSettings = null;
-    let importedDaysMap = null;
-
-    if (paramTitle && paramStart && paramEnd) {
-        // Tenta decodificar as notas e status importados
-        if (paramDays) {
-            try {
-                const decodedString = decodeURIComponent(escape(atob(paramDays)));
-                const parsedData = JSON.parse(decodedString);
-                importedDaysMap = {};
-                parsedData.forEach(item => {
-                    importedDaysMap[item[0]] = {
-                        completed: item[1] === 1,
-                        note: item[2]
-                    };
-                });
-            } catch (err) {
-                console.error("Erro ao decodificar dados dos dias importados:", err);
-            }
-        }
-
-        // Verifica se é diferente das configurações salvas atualmente antes de reiniciar notas
-        const currentStoredSettings = localStorage.getItem('daytrack_settings');
+    if (urlParams.get('b')) {
+        // Se abriu a partir de um link de compartilhamento (?b=...)
+        const currentBin = localStorage.getItem('daytrack_current_bin_id');
         let shouldImport = true;
-        
-        if (currentStoredSettings) {
-            const current = JSON.parse(currentStoredSettings);
-            if (current.startDate !== paramStart || current.endDate !== paramEnd || current.title !== decodeURIComponent(paramTitle) || importedDaysMap) {
-                shouldImport = confirm("Você está abrindo uma contagem compartilhada com configurações e/ou notas personalizadas. Deseja carregar esta nova contagem e substituir seus dados locais?");
-            }
+
+        if (currentBin && currentBin !== urlParams.get('b')) {
+            shouldImport = confirm("Você está abrindo uma contagem compartilhada diferente da sua atual. Deseja se conectar a esta nova contagem e carregar os dados dela?");
         }
 
         if (shouldImport) {
-            loadedSettings = {
-                title: decodeURIComponent(paramTitle),
-                startDate: paramStart,
-                endDate: paramEnd,
-                totalDays: getDaysDifference(paramStart, paramEnd) + 1
-            };
-            localStorage.setItem('daytrack_settings', JSON.stringify(loadedSettings));
-            
-            // Se houver dados de dias importados, reconstrói o array de dias imediatamente
-            if (importedDaysMap) {
-                const total = loadedSettings.totalDays;
-                const start = loadedSettings.startDate;
-                state.days = [];
-                for (let i = 0; i < total; i++) {
-                    const dayNum = i + 1;
-                    const imp = importedDaysMap[dayNum] || { completed: false, note: "" };
-                    state.days.push({
-                        dayNumber: dayNum,
-                        date: addDaysToDate(start, i),
-                        completed: imp.completed,
-                        note: imp.note
-                    });
+            localStorage.setItem('daytrack_current_bin_id', urlParams.get('b'));
+            binId = urlParams.get('b');
+        } else {
+            // Se recusou, limpa o parâmetro b da URL para não perguntar de novo
+            binId = currentBin;
+            const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+            window.history.replaceState({ path: cleanUrl }, '', cleanUrl);
+        }
+    }
+
+    // Carrega dados da nuvem se estiver conectado a um bin
+    if (binId) {
+        try {
+            const response = await fetch(`https://jsonbin-zeta.vercel.app/api/bins/${binId}`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data.settings && data.days) {
+                    state.settings = data.settings;
+                    state.days = data.days;
+                    localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
+                    localStorage.setItem('daytrack_days', JSON.stringify(state.days));
                 }
-                saveDaysState();
-            } else {
-                localStorage.removeItem('daytrack_days');
+            } else if (response.status === 404) {
+                console.warn("Bin não encontrado na nuvem. Desconectando.");
+                localStorage.removeItem('daytrack_current_bin_id');
+                binId = null;
             }
-        }
-        
-        // Limpa os parâmetros da URL de forma silenciosa
-        const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
-        window.history.replaceState({ path: cleanUrl }, '', cleanUrl);
-    }
-
-    const storedSettings = localStorage.getItem('daytrack_settings');
-    const storedDays = localStorage.getItem('daytrack_days');
-
-    if (loadedSettings) {
-        state.settings = loadedSettings;
-    } else if (storedSettings) {
-        state.settings = JSON.parse(storedSettings);
-        // Compatibilidade reversa: se não houver endDate mas houver totalDays, calcula
-        if (!state.settings.endDate) {
-            const total = parseInt(state.settings.totalDays, 10) || 30;
-            state.settings.endDate = addDaysToDate(state.settings.startDate, total - 1);
+        } catch (err) {
+            console.error("Erro ao carregar dados compartilhados da nuvem. Usando cache local:", err);
+            // Fallback para cache local em caso de erro de rede
+            const storedSettings = localStorage.getItem('daytrack_settings');
+            const storedDays = localStorage.getItem('daytrack_days');
+            if (storedSettings) state.settings = JSON.parse(storedSettings);
+            if (storedDays) state.days = JSON.parse(storedDays);
         }
     } else {
-        state.settings.title = "Minha Viagem";
-        state.settings.startDate = getTodayDateStr();
-        state.settings.endDate = addDaysToDate(state.settings.startDate, 29); // 30 dias de duração (dia 1 ao 30)
-        state.settings.totalDays = 30;
-        localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
-    }
+        // Modo local tradicional (sem sincronização)
+        const storedSettings = localStorage.getItem('daytrack_settings');
+        const storedDays = localStorage.getItem('daytrack_days');
 
-    // Se já foram importados no bloco acima, não lê de novo do storedDays
-    if (importedDaysMap && loadedSettings) {
-        // já está preenchido no state.days
-    } else if (storedDays) {
-        state.days = JSON.parse(storedDays);
-    } else {
-        state.days = [];
+        if (storedSettings) {
+            state.settings = JSON.parse(storedSettings);
+        } else {
+            state.settings.title = "Minha Viagem";
+            state.settings.startDate = getTodayDateStr();
+            state.settings.endDate = addDaysToDate(state.settings.startDate, 29); // 30 dias
+            state.settings.totalDays = 30;
+            localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
+        }
+
+        if (storedDays) {
+            state.days = JSON.parse(storedDays);
+        } else {
+            state.days = [];
+        }
     }
 
     // Garante que a estrutura de dias está inicializada e sincronizada
@@ -235,6 +203,11 @@ function init() {
 
     // 3. Atualiza a Interface
     updateUI();
+
+    // 4. Inicia o Polling de atualização automática
+    if (binId) {
+        startPolling();
+    }
 }
 
 // Configura todos os ouvintes de eventos
@@ -269,6 +242,10 @@ function setupEventListeners() {
     settingsCloseBtn.addEventListener('click', closeAllModals);
     settingsForm.addEventListener('submit', saveSettings);
     resetAllBtn.addEventListener('click', resetAllData);
+    
+    if (disconnectBtn) {
+        disconnectBtn.addEventListener('click', disconnectFromCloud);
+    }
 
     // Botão Compartilhar
     if (shareBtn) {
@@ -492,6 +469,12 @@ function openSettingsModal() {
     // Define a data mínima de término
     settingsEndDateInput.min = state.settings.startDate;
 
+    // Controla exibição do botão de desconectar do compartilhamento
+    const binId = localStorage.getItem('daytrack_current_bin_id');
+    if (disconnectBtn) {
+        disconnectBtn.style.display = binId ? 'block' : 'none';
+    }
+
     settingsModal.classList.add('active');
     settingsModal.setAttribute('aria-hidden', 'false');
 }
@@ -528,6 +511,9 @@ function saveSettings(e) {
     // Ajusta o array de dias baseado nas novas configurações
     adjustDaysArray();
 
+    // Sincroniza as configurações com a nuvem, se compartilhado
+    syncToCloud();
+
     updateUI();
     closeAllModals();
 }
@@ -537,6 +523,7 @@ function resetAllData() {
     if (confirm("ATENÇÃO: Isso apagará permanentemente todos os dias registrados e notas! Deseja continuar?")) {
         localStorage.removeItem('daytrack_days');
         localStorage.removeItem('daytrack_settings');
+        localStorage.removeItem('daytrack_current_bin_id');
         
         // Reseta o estado local
         const today = getTodayDateStr();
@@ -551,49 +538,168 @@ function resetAllData() {
         localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
         adjustDaysArray();
 
+        // Limpa a URL
+        const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+        window.history.replaceState({ path: cleanUrl }, '', cleanUrl);
+
         updateUI();
         closeAllModals();
     }
 }
 
-// Salva o array de dias no LocalStorage
-function saveDaysState() {
-    localStorage.setItem('daytrack_days', JSON.stringify(state.days));
+// Desconecta da contagem compartilhada atual voltando a ser local
+function disconnectFromCloud() {
+    if (confirm("Deseja se desconectar desta contagem compartilhada? Seus dados serão mantidos no navegador, mas futuras edições não serão enviadas ou sincronizadas na nuvem.")) {
+        localStorage.removeItem('daytrack_current_bin_id');
+        
+        // Remove o parâmetro da URL
+        const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+        window.history.replaceState({ path: cleanUrl }, '', cleanUrl);
+        
+        updateUI();
+        closeAllModals();
+    }
 }
 
-// Gera o link de compartilhamento da contagem (com notas e status) e copia para a área de transferência
-function shareCountdown() {
-    const title = encodeURIComponent(state.settings.title);
-    const start = state.settings.startDate;
-    const end = state.settings.endDate;
+// Salva o array de dias no LocalStorage e sincroniza na nuvem
+function saveDaysState() {
+    localStorage.setItem('daytrack_days', JSON.stringify(state.days));
+    syncToCloud();
+}
 
-    // Filtra e prepara as notas e status dos dias para serialização compacta (apenas dias com dados)
-    const activeDays = state.days
-        .filter(d => d.completed || (d.note && d.note.trim() !== ''))
-        .map(d => [d.dayNumber, d.completed ? 1 : 0, d.note]);
-    
-    let daysParam = '';
-    if (activeDays.length > 0) {
+// Cria um novo bin de compartilhamento na nuvem (JSONBin-zeta Vercel)
+async function createShareBin() {
+    const payload = {
+        settings: state.settings,
+        days: state.days
+    };
+
+    try {
+        const response = await fetch('https://jsonbin-zeta.vercel.app/api/bins', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        if (response.ok) {
+            const data = await response.json();
+            if (data.id) {
+                localStorage.setItem('daytrack_current_bin_id', data.id);
+                return data.id;
+            }
+        }
+    } catch (err) {
+        console.error("Erro ao criar compartilhamento na nuvem:", err);
+    }
+    return null;
+}
+
+// Sincroniza o estado atual com a nuvem (JSONBin-zeta Vercel)
+async function syncToCloud() {
+    const binId = localStorage.getItem('daytrack_current_bin_id');
+    if (!binId) return;
+
+    const payload = {
+        settings: state.settings,
+        days: state.days
+    };
+
+    try {
+        await fetch(`https://jsonbin-zeta.vercel.app/api/bins/${binId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        console.log("Estado sincronizado com a nuvem.");
+    } catch (err) {
+        console.error("Erro ao sincronizar com a nuvem:", err);
+    }
+}
+
+// Polling de atualização automática
+let pollingInterval = null;
+function startPolling() {
+    const binId = localStorage.getItem('daytrack_current_bin_id');
+    if (!binId) return;
+
+    // Cancela intervalo existente
+    if (pollingInterval) clearInterval(pollingInterval);
+
+    pollingInterval = setInterval(async () => {
+        const currentBinId = localStorage.getItem('daytrack_current_bin_id');
+        if (!currentBinId) {
+            clearInterval(pollingInterval);
+            return;
+        }
+
         try {
-            const dataString = JSON.stringify(activeDays);
-            const base64Data = btoa(unescape(encodeURIComponent(dataString)));
-            daysParam = `&d=${base64Data}`;
+            const response = await fetch(`https://jsonbin-zeta.vercel.app/api/bins/${currentBinId}`);
+            if (response.ok) {
+                const data = await response.json();
+                
+                // Só atualiza se o usuário não estiver com modais abertos
+                const modalActive = editDayModal.classList.contains('active') || settingsModal.classList.contains('active');
+                if (!modalActive && data.settings && data.days) {
+                    const stringifiedLocal = JSON.stringify({ settings: state.settings, days: state.days });
+                    const stringifiedCloud = JSON.stringify(data);
+                    
+                    if (stringifiedLocal !== stringifiedCloud) {
+                        state.settings = data.settings;
+                        state.days = data.days;
+                        localStorage.setItem('daytrack_settings', JSON.stringify(state.settings));
+                        localStorage.setItem('daytrack_days', JSON.stringify(state.days));
+                        updateUI();
+                        console.log("Linha do tempo atualizada automaticamente da nuvem.");
+                    }
+                }
+            }
         } catch (err) {
-            console.error("Erro ao codificar notas para compartilhamento:", err);
+            console.error("Erro no polling de sincronização:", err);
+        }
+    }, 10000); // 10 segundos
+}
+
+// Gera o link de compartilhamento da contagem e copia para a área de transferência
+async function shareCountdown() {
+    let binId = localStorage.getItem('daytrack_current_bin_id');
+
+    if (!binId) {
+        // Se ainda não tiver um ID de compartilhamento ativo na nuvem, cria um novo
+        shareBtn.disabled = true;
+        const icon = shareBtn.querySelector('svg');
+        if (icon) icon.style.opacity = '0.5';
+        
+        binId = await createShareBin();
+        
+        shareBtn.disabled = false;
+        if (icon) icon.style.opacity = '1';
+
+        if (binId) {
+            // Inicia o polling de atualização automática
+            startPolling();
         }
     }
 
-    // Constrói a URL completa
-    const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?t=${title}&s=${start}&e=${end}${daysParam}`;
+    if (binId) {
+        // Constrói a URL completa com o ID do bin (?b=BIN_ID)
+        const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?b=${binId}`;
 
-    // Copia para o clipboard
-    navigator.clipboard.writeText(shareUrl).then(() => {
-        alert("Link de compartilhamento (com notas inclusas!) copiado para a área de transferência.\nEnvie para outras pessoas para compartilharem esta contagem.");
-    }).catch(err => {
-        console.error('Erro ao copiar link: ', err);
-        // Fallback em caso de erro (ex: navegadores sem suporte a navigator.clipboard)
-        prompt("Copie o link abaixo para compartilhar:", shareUrl);
-    });
+        // Atualiza a URL do navegador silenciosamente para refletir a conexão de compartilhamento
+        window.history.replaceState({ path: shareUrl }, '', shareUrl);
+
+        // Copia para o clipboard
+        navigator.clipboard.writeText(shareUrl).then(() => {
+            alert("Esta contagem agora está ativa na nuvem!\n\nO link de compartilhamento foi copiado para a área de transferência. Todas as edições que você ou outras pessoas com este link fizerem serão sincronizadas automaticamente em tempo real!");
+        }).catch(err => {
+            console.error('Erro ao copiar link: ', err);
+            prompt("Copie o link abaixo para compartilhar a contagem sincronizada:", shareUrl);
+        });
+    } else {
+        alert("Não foi possível gerar a contagem na nuvem. Verifique sua conexão.");
+    }
 }
 
 // Fecha todos os modais ativos
